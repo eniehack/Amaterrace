@@ -1,68 +1,79 @@
+// SPDX-License-Identifier: Apache-2.0 OR MPL-2.0
+
+#include <string>
 #include <Arduino.h>
 #include <RTClib.h>
-#include <string>
-#include <inttypes.h>
-#include "../lib/AQM1602/AQM1602.hpp"
+#include <freertos/task.h>
+#include <freertos/semphr.h>
 #define LEDC_CHANNEL 0
-#define LED 16
+#define LED_PIN 16
+#define BUTTON_PIN 17
 #define freq 5000
 #define resolution 8
-const uint8_t alerm_hour = 18;
-const uint8_t alerm_minutes = 5;
+uint8_t alerm_hour = 17;
+uint8_t alerm_minute = 2;
 
 RTC_DS1307 rtc;
+xSemaphoreHandle xLEDContolMutex;
 
-void display_time(DateTime);
+void turnOff(int* arg);
+void bright(int* arg);
+void vBrightTask(void* arg);
 
 void setup() {
-	while (!Serial);
 	Serial.begin(115200);
 
 	if (! rtc.begin()) {
 		Serial.println("Couldn't find RTC");
 		while (1);
 	}
-
 	if (! rtc.isrunning()) {
 		Serial.println("RTC is NOT running!");
-	} else {
 		rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
 	}
 
-	lcd::init();
-}
+	ledcSetup(LEDC_CHANNEL, 12800, resolution);
+	ledcAttachPin(LED_PIN, LEDC_CHANNEL);
+	pinMode(BUTTON_PIN, INPUT);
 
-void loop() {
-	DateTime now = rtc.now();
-    if (now.minute() == alerm_minutes && now.hour() == alerm_hour) {
-		for (int i = 0; i < 255; i++){
-			if (i < 100) {
-				Serial.println(i, DEC);
-				ledcWrite(LEDC_CHANNEL, i);
-				delay(5000);
-			} else {
-				Serial.println(i, DEC);
-				ledcWrite(LEDC_CHANNEL, i);
-				delay(100);
-			}
-			display_time(now);
-		}
-		ledcWrite(LEDC_CHANNEL, 0);
-	} else {
-		display_time(now);
-		delay(1000);
+	xLEDContolMutex = xSemaphoreCreateMutex();
+	if(xLEDContolMutex != NULL) {
+		xTaskCreatePinnedToCore(vBrightTask, "Task0", 4096, NULL, 1, NULL, 1);
 	}
 }
 
-void display_time(DateTime now) {
-	char l1[9], l2[9];
-	sprintf(l1, "%u/%u/%u", now.year(), now.month(), now.day()); 
-	sprintf(l2, "%u:%u:%u", now.hour(), now.minute(), now.second());
-	std::string str1(l1, 9);
-	std::string str2(l2, 9);
-	lcd::clear_display();
-	lcd::return_home_cursor();
-	lcd::write_string(str1);
-	lcd::linebreak();
-	lcd::write_string(str2);
+void loop() {}
+
+void vBrightTask(void* arg) {
+	BaseType_t xStatus;
+	const TickType_t xTicksToWait = 1000UL;
+	int LEDStatus = 0;
+	while (true) {
+		DateTime now = rtc.now();
+		if (digitalRead(17) == HIGH) {
+			turnOff(&LEDStatus);
+		} else {
+			if (now.hour() == alerm_hour && now.minute() == alerm_minute){
+				bright(&LEDStatus);
+				LEDStatus++;
+			}
+		}
+	}
+}
+
+void turnOff(int* arg) {
+	for (int i = *arg; i >= 0; i--){	
+		ledcWrite(LEDC_CHANNEL, i);
+		delay(100);
+	}
+	*arg = 0;
+}
+
+void bright(int *arg) {
+	ledcWrite(LEDC_CHANNEL, *arg);
+	if (*arg < 100) {
+		delay(100);
+	} else {
+		delay(5000);
+	}
 }
